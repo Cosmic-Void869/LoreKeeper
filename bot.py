@@ -13,8 +13,7 @@ load_dotenv()
 # Setup explicit intents (Message Content + Reactions are required)
 intents = discord.Intents.default()
 intents.message_content = True
-intents.guild_messages = True
-intents.guild_message_reactions = True
+intents.reactions = True  # Corrected intent attribute
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 DATA_FILE = "server_lore.json"
@@ -39,7 +38,7 @@ async def on_ready():
     print(f"✨ LoreBot Online: {bot.user.name} (ID: {bot.user.id})")
     await bot.change_presence(activity=discord.Game(name="Managing Server Lore | !help"))
     
-    # Start the slow background background scanner if not already running
+    # Start the slow background scanner if not already running
     if not slow_scan_task.is_running():
         slow_scan_task.start()
 
@@ -279,7 +278,6 @@ async def slow_scan_task():
     for guild in bot.guilds:
         for channel in guild.text_channels:
             try:
-                # Check permissions
                 permissions = channel.permissions_for(guild.me)
                 if not permissions.read_message_history or not permissions.read_messages:
                     continue
@@ -287,7 +285,6 @@ async def slow_scan_task():
                 data = load_data()
                 existing_texts = [q["text"] for q in data["quotes"]]
                 
-                # Fetch just a very small chunk (e.g., last 10 messages) to stay completely safe
                 async for message in channel.history(limit=10):
                     if message.author.bot or not message.content:
                         continue
@@ -302,7 +299,6 @@ async def slow_scan_task():
                         save_data(data)
                         existing_texts.append(message.content)
                         
-                # Small sleep between channels to prevent hammering the API
                 await asyncio.sleep(2)
             except Exception as e:
                 print(f"Background scan error in #{channel.name}: {e}")
