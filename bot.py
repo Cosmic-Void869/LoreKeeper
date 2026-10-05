@@ -28,9 +28,9 @@ def load_data():
         "quotes": [], 
         "lore": {}, 
         "user_chat_counts": {}, 
-        "server_emojis": {},       # Tracks favorite server emojis: {"😂": 12}
-        "trigrams": {},            # Multi-word predictive structural database: {"word1 word2": ["word3"]}
-        "user_trigrams": {}        # High-definition per-user structure index: {"user_id": {"word1 word2": ["word3"]}}
+        "server_emojis": {},      # Tracks favorite server emojis: {"😂": 12}
+        "trigrams": {},           # Multi-word predictive structural database: {"word1 word2": ["word3"]}
+        "user_trigrams": {}       # High-definition per-user structure index: {"user_id": {"word1 word2": ["word3"]}}
     }
     if not os.path.exists(DATA_FILE):
         return default_schema
@@ -161,6 +161,7 @@ async def on_ready():
         print(f"Sync error: {e}")
     if not status_rotator.is_running():
         status_rotator.start()
+
 @tasks.loop(minutes=10)
 async def status_rotator():
     """Reflects highly precise live calculated linguistic connections on status loop."""
@@ -171,8 +172,12 @@ async def status_rotator():
 # --- HIGH-FREQUENCY CHAT ADAPTATION & INTELLIGENT REPLY ENGINE ---
 @bot.event
 async def on_message(message):
-    if message.author.bot or message.content.startswith("!"):
-        await bot.process_commands(message)
+    if message.author.bot:
+        return
+
+    # Process commands first so prefix commands work smoothly
+    await bot.process_commands(message)
+    if message.content.startswith("!"):
         return
 
     data = load_data()
@@ -208,20 +213,37 @@ async def on_message(message):
             advanced_reply = generate_complex_ai_mimic(data, user_id=target, seed_word=seed)
             await message.channel.send(advanced_reply)
 
-    await bot.process_commands(message)
-
 # --- 🆕 HYBRID / SLASH COMMAND ENGINE ---
 
 @bot.hybrid_command(name="mimic", description="Generates a complex text string based on server learning.")
 async def mimic(ctx: commands.Context):
-    """Generates an AI response. Visible ONLY to the user who ran it if run as a slash command."""
+    """Generates an AI response based on learned chat patterns."""
     data = load_data()
-    
-    # Generate the reply based on the user's history
     advanced_reply = generate_complex_ai_mimic(data, user_id=ctx.author.id)
     
-    # Using ctx.reply handles ephemeral correctly for BOTH slash commands and text prefix commands
-    await ctx.reply(advanced_reply, ephemeral=True)
+    # Safely handle ephemeral response (only works for slash commands, not prefix commands)
+    if ctx.interaction:
+        await ctx.reply(advanced_reply, ephemeral=True)
+    else:
+        await ctx.reply(advanced_reply)
+
+@bot.hybrid_command(name="stats", description="Displays the bot's current neural matrix statistics.")
+async def stats(ctx: commands.Context):
+    """Displays tracking insights."""
+    data = load_data()
+    total_trigrams = sum(len(v) for v in data["trigrams"].values())
+    total_quotes = len(data["quotes"])
+    total_users = len(data["user_chat_counts"])
+    
+    embed = discord.Embed(title="🧠 Neural Brain Matrix Stats", color=discord.Color.blurple())
+    embed.add_field(name="Trigram Connections", value=f"{total_trigrams:,}", inline=True)
+    embed.add_field(name="Captured Quotes", value=f"{total_quotes:,}", inline=True)
+    embed.add_field(name="Tracked Users", value=f"{total_users:,}", inline=True)
+    
+    if ctx.interaction:
+        await ctx.reply(embed=embed, ephemeral=True)
+    else:
+        await ctx.reply(embed=embed)
 
 # Run the bot
 bot.run(os.getenv("TOKEN"))
