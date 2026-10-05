@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Setup maximum explicit gateway privileges
+# Setup gateway privileges
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True  
@@ -18,51 +18,63 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# Database file configuration
 DATA_FILE = "server_lore.json"
-
-# Your specific Test Server ID for instant slash command syncing
 TEST_GUILD_ID = discord.Object(id=1551157172589690982)
-
-# Add any custom phrases you want your bot to skip entirely during learning
 WORD_BLACKLIST = ["token", "password", "secret", "https://", "http://"]
 
+# In-memory data cache to prevent disk lag on every message
+_DATA_CACHE = None
+
 def load_data():
-    """Loads database or yields maximum-tier predictive nested tracking schema."""
+    """Loads database into memory cache for ultra-fast access."""
+    global _DATA_CACHE
+    if _DATA_CACHE is not None:
+        return _DATA_CACHE
+        
     default_schema = {
         "quotes": [], 
         "lore": {}, 
         "user_chat_counts": {}, 
-        "server_emojis": {},      # Tracks favorite server emojis: {"😂": 12}
-        "trigrams": {},           # Multi-word predictive structural database: {"word1 word2": ["word3"]}
-        "user_trigrams": {},      # High-definition per-user structure index: {"user_id": {"word1 word2": ["word3"]}}
-        "message_archive": []     # Full text archive for brainsearch: list of message dicts
+        "server_emojis": {},      
+        "trigrams": {},           
+        "user_trigrams": {},      
+        "message_archive": []     
     }
     if not os.path.exists(DATA_FILE):
-        return default_schema
+        _DATA_CACHE = default_schema
+        return _DATA_CACHE
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            for key in default_schema:
+            for key, val in default_schema.items():
                 if key not in data:
-                    data[key] = default_schema[key]
-            return data
+                    data[key] = val
+            _DATA_CACHE = data
+            return _DATA_CACHE
     except json.JSONDecodeError:
-        return default_schema
+        _DATA_CACHE = default_schema
+        return _DATA_CACHE
 
-def save_data(data):
-    """Safely and securely commits massive memory matrix state changes to disk."""
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+def save_data(data=None):
+    """Commits memory cache changes safely to disk."""
+    global _DATA_CACHE
+    if data is not None:
+        _DATA_CACHE = data
+    if _DATA_CACHE is not None:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(_DATA_CACHE, f, indent=4, ensure_ascii=False)
+
+@tasks.loop(minutes=5)
+async def auto_save_task():
+    """Background task to securely persist memory to disk every 5 minutes."""
+    save_data()
 
 def clean_token(token):
-    """Deep structural text cleaning to isolate pure linguistic mechanics."""
     if any(blacklisted in token for blacklisted in WORD_BLACKLIST):
         return ""
     return token.strip(".,!?\"()[]{}*<>~`").lower()
 
 def learn_sentence_trigrams(data, text, user_id=None):
-    """Breaks down text strings into complex overlapping word clusters for structural mimicry."""
     raw_tokens = text.split()
     tokens = [clean_token(t) for t in raw_tokens if clean_token(t)]
 
@@ -87,7 +99,6 @@ def learn_sentence_trigrams(data, text, user_id=None):
         _append_trigram(data, key, w3, user_id)
 
 def _append_trigram(data, key, value, user_id=None):
-    """Internal micro-helper to map data matrix branches safely."""
     if key not in data["trigrams"]:
         data["trigrams"][key] = []
     data["trigrams"][key].append(value)
@@ -100,7 +111,6 @@ def _append_trigram(data, key, value, user_id=None):
         data["user_trigrams"][user_id][key].append(value)
 
 def generate_complex_ai_mimic(data, user_id=None, seed_word=None, max_words=20):
-    """Assembles complex, contextually linked text strings using predictive algorithms."""
     pool = data["trigrams"]
     if user_id and str(user_id) in data["user_trigrams"]:
         pool = data["user_trigrams"][str(user_id)]
@@ -155,23 +165,26 @@ def generate_complex_ai_mimic(data, user_id=None, seed_word=None, max_words=20):
 
 @bot.event
 async def on_ready():
-    print(f"👑 MAX-POWER V4.0 AI LORE CLONE ONLINE: {bot.user.name} (ID: {bot.user.id})")
+    print(f"👑 MAX-POWER V4.2 OPTIMIZED: {bot.user.name} (ID: {bot.user.id})")
+    load_data()  # Pre-load data cache on startup
     try:
         bot.tree.copy_global_to(guild=TEST_GUILD_ID)
         await bot.tree.sync(guild=TEST_GUILD_ID)
-        print("Slash commands synced instantly to your server!")
+        print("Slash commands synced instantly!")
     except Exception as e:
         print(f"Sync error: {e}")
+        
     if not status_rotator.is_running():
         status_rotator.start()
+    if not auto_save_task.is_running():
+        auto_save_task.start()
 
 @tasks.loop(minutes=10)
 async def status_rotator():
     data = load_data()
     total_connections = sum(len(v) for v in data["trigrams"].values())
-    await bot.change_presence(activity=discord.CustomActivity(name=f"🧠 Processing {total_connections} structural Trigram layers | /mimic"))
+    await bot.change_presence(activity=discord.CustomActivity(name=f"🧠 Processing {total_connections} structural layers | /help"))
 
-# --- HIGH-FREQUENCY CHAT ADAPTATION & INTELLIGENT REPLY ENGINE ---
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -184,7 +197,6 @@ async def on_message(message):
     data = load_data()
     user_id = str(message.author.id)
     
-    # 1. Update activity matrix indexes & archive message for searching
     data["user_chat_counts"][user_id] = data["user_chat_counts"].get(user_id, 0) + 1
     
     if message.content.strip():
@@ -196,7 +208,6 @@ async def on_message(message):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
         })
 
-    # 2. Extract syntactic structural insights live
     learn_sentence_trigrams(data, message.content, user_id)
     
     if len(message.content) > 25 and random.random() < 0.02:
@@ -207,8 +218,6 @@ async def on_message(message):
                 "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
             })
             await message.add_reaction("👑") 
-
-    save_data(data)
     
     if random.random() < 0.04 and len(data["trigrams"]) > 25:
         async with message.channel.typing():
@@ -221,8 +230,28 @@ async def on_message(message):
 
 
 # ==========================================
-# 🚀 20 HYBRID COMMANDS (Prefix & Slash)
+# 🚀 20 FEATURES + DYNAMIC HELP COMMAND
 # ==========================================
+
+# 0. /help (Custom Help Command)
+@bot.hybrid_command(name="help", description="Displays all available commands and what they do.")
+async def help_command(ctx: commands.Context):
+    embed = discord.Embed(
+        title="👑 aLore keeper — Command Matrix",
+        description="Here are all available features. You can use them via slash commands (`/`) or prefix (`!`).",
+        color=discord.Color.gold()
+    )
+    
+    # Dynamically pull all registered hybrid/slash commands from the bot tree
+    for command in sorted(bot.tree.get_commands(), key=lambda c: c.name):
+        embed.add_field(
+            name=f"/{command.name}",
+            value=command.description or "No description provided.",
+            inline=False
+        )
+        
+    embed.set_footer(text="aLore keeper v4.2 • Powered by Neural Trigram Matrices")
+    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
 # 1. /mimic
 @bot.hybrid_command(name="mimic", description="Generates a complex text string based on server learning.")
@@ -235,16 +264,11 @@ async def mimic(ctx: commands.Context):
 @bot.hybrid_command(name="stats", description="Displays the bot's neural matrix statistics.")
 async def stats(ctx: commands.Context):
     data = load_data()
-    total_trigrams = sum(len(v) for v in data["trigrams"].values())
-    total_quotes = len(data["quotes"])
-    total_users = len(data["user_chat_counts"])
-    total_archived = len(data["message_archive"])
-    
     embed = discord.Embed(title="🧠 Neural Brain Matrix Stats", color=discord.Color.blurple())
-    embed.add_field(name="Trigram Connections", value=f"{total_trigrams:,}", inline=True)
-    embed.add_field(name="Captured Quotes", value=f"{total_quotes:,}", inline=True)
-    embed.add_field(name="Archived Messages", value=f"{total_archived:,}", inline=True)
-    embed.add_field(name="Tracked Users", value=f"{total_users:,}", inline=True)
+    embed.add_field(name="Trigram Connections", value=f"{sum(len(v) for v in data['trigrams'].values()):,}", inline=True)
+    embed.add_field(name="Captured Quotes", value=f"{len(data['quotes']):,}", inline=True)
+    embed.add_field(name="Archived Messages", value=f"{len(data['message_archive']):,}", inline=True)
+    embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
 # 3. /brainscan
@@ -287,15 +311,12 @@ async def brainscan(ctx: commands.Context):
 @bot.hybrid_command(name="brainsearch", description="Searches archived message memory for keywords.")
 async def brainsearch(ctx: commands.Context, *, query: str):
     data = load_data()
-    query_lower = query.lower()
-    matches = [m for m in data["message_archive"] if query_lower in m["content"].lower()]
-    
+    matches = [m for m in data["message_archive"] if query.lower() in m["content"].lower()]
     if not matches:
         return await ctx.reply(f"❌ No archived messages found matching **'{query}'**.", ephemeral=bool(ctx.interaction))
     
-    matches = matches[-5:]
     embed = discord.Embed(title=f"🔎 BrainSearch Results: '{query}'", color=discord.Color.green())
-    for m in matches:
+    for m in matches[-5:]:
         embed.add_field(name=f"From {m['author']} (#{m['channel']} at {m['timestamp']})", value=m['content'], inline=False)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
@@ -352,8 +373,7 @@ async def emojistats(ctx: commands.Context):
     
     top_emojis = sorted(emojis.items(), key=lambda x: x[1], reverse=True)[:10]
     embed = discord.Embed(title="📊 Server Emoji Matrix", color=discord.Color.magenta())
-    desc = "".join([f"{emo}: **{count}** uses\n" for emo, count in top_emojis])
-    embed.description = desc
+    embed.description = "".join([f"{emo}: **{count}** uses\n" for emo, count in top_emojis])
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
 # 9. /userprofile
@@ -415,11 +435,12 @@ async def asklore(ctx: commands.Context, *, question: str):
 @bot.hybrid_command(name="clearmatrix", description="[Admin] Wipes and resets the bot's learning matrices.")
 @commands.has_permissions(administrator=True)
 async def clearmatrix(ctx: commands.Context):
-    default_schema = {
+    global _DATA_CACHE
+    _DATA_CACHE = {
         "quotes": [], "lore": {}, "user_chat_counts": {}, 
         "server_emojis": {}, "trigrams": {}, "user_trigrams": {}, "message_archive": []
     }
-    save_data(default_schema)
+    save_data()
     await ctx.reply("⚠️ **Neural matrix completely wiped and reset to factory settings!**", ephemeral=True)
 
 # 15. /exportlore
@@ -427,8 +448,7 @@ async def clearmatrix(ctx: commands.Context):
 @commands.has_permissions(administrator=True)
 async def exportlore(ctx: commands.Context):
     size_bytes = os.path.getsize(DATA_FILE) if os.path.exists(DATA_FILE) else 0
-    size_kb = size_bytes / 1024
-    await ctx.reply(f"📦 **Database File Size:** {size_kb:.2f} KB (`{DATA_FILE}`)", ephemeral=True)
+    await ctx.reply(f"📦 **Database File Size:** {size_bytes / 1024:.2f} KB (`{DATA_FILE}`)", ephemeral=True)
 
 # 16. /magic8
 @bot.hybrid_command(name="magic8", description="Answers a yes/no question using sarcastic Markov 8-ball logic.")
@@ -474,7 +494,7 @@ async def matrixhealth(ctx: commands.Context):
     status = "Optimal 🟢" if len(data["trigrams"]) > 10 else "Learning Phase 🟡"
     embed = discord.Embed(title="🛠️ Matrix System Diagnostics", color=discord.Color.green())
     embed.add_field(name="Brain Status", value=status, inline=True)
-    embed.add_field(name="Memory Schema Version", value="v4.0 Max-Power", inline=True)
+    embed.add_field(name="Memory Schema Version", value="v4.2 Optimized Help", inline=True)
     embed.add_field(name="JSON Schema Check", value="Passed ✅", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
