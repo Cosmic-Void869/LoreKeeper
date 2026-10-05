@@ -18,7 +18,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# Change the data file to server_lore.json
+# Database file configuration
 DATA_FILE = "server_lore.json"
 
 # Your specific Test Server ID for instant slash command syncing
@@ -35,7 +35,8 @@ def load_data():
         "user_chat_counts": {}, 
         "server_emojis": {},      # Tracks favorite server emojis: {"😂": 12}
         "trigrams": {},           # Multi-word predictive structural database: {"word1 word2": ["word3"]}
-        "user_trigrams": {}       # High-definition per-user structure index: {"user_id": {"word1 word2": ["word3"]}}
+        "user_trigrams": {},      # High-definition per-user structure index: {"user_id": {"word1 word2": ["word3"]}}
+        "message_archive": []     # Full text archive for brainsearch: list of message dicts
     }
     if not os.path.exists(DATA_FILE):
         return default_schema
@@ -160,7 +161,6 @@ def generate_complex_ai_mimic(data, user_id=None, seed_word=None, max_words=20):
 async def on_ready():
     print(f"👑 MAX-POWER V4.0 AI LORE CLONE ONLINE: {bot.user.name} (ID: {bot.user.id})")
     try:
-        # Instantly sync to your specific test server
         bot.tree.copy_global_to(guild=TEST_GUILD_ID)
         await bot.tree.sync(guild=TEST_GUILD_ID)
         print("Slash commands synced instantly to your server!")
@@ -182,7 +182,6 @@ async def on_message(message):
     if message.author.bot:
         return
 
-    # Process commands first so prefix commands work smoothly
     await bot.process_commands(message)
     if message.content.startswith("!"):
         return
@@ -190,9 +189,18 @@ async def on_message(message):
     data = load_data()
     user_id = str(message.author.id)
     
-    # 1. Update activity matrix indexes
+    # 1. Update activity matrix indexes & archive message for searching
     data["user_chat_counts"][user_id] = data["user_chat_counts"].get(user_id, 0) + 1
     
+    if message.content.strip():
+        data["message_archive"].append({
+            "content": message.content,
+            "author": message.author.display_name,
+            "user_id": user_id,
+            "channel": message.channel.name,
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
+        })
+
     # 2. Extract syntactic structural insights live
     learn_sentence_trigrams(data, message.content, user_id)
     
@@ -220,7 +228,7 @@ async def on_message(message):
             advanced_reply = generate_complex_ai_mimic(data, user_id=target, seed_word=seed)
             await message.channel.send(advanced_reply)
 
-# --- 🆕 HYBRID / SLASH COMMAND ENGINE ---
+# --- 🆕 HYBRID COMMAND ENGINE ---
 
 @bot.hybrid_command(name="mimic", description="Generates a complex text string based on server learning.")
 async def mimic(ctx: commands.Context):
@@ -240,12 +248,90 @@ async def stats(ctx: commands.Context):
     total_trigrams = sum(len(v) for v in data["trigrams"].values())
     total_quotes = len(data["quotes"])
     total_users = len(data["user_chat_counts"])
+    total_archived = len(data["message_archive"])
     
     embed = discord.Embed(title="🧠 Neural Brain Matrix Stats", color=discord.Color.blurple())
     embed.add_field(name="Trigram Connections", value=f"{total_trigrams:,}", inline=True)
     embed.add_field(name="Captured Quotes", value=f"{total_quotes:,}", inline=True)
+    embed.add_field(name="Archived Messages", value=f"{total_archived:,}", inline=True)
     embed.add_field(name="Tracked Users", value=f"{total_users:,}", inline=True)
     
+    if ctx.interaction:
+        await ctx.reply(embed=embed, ephemeral=True)
+    else:
+        await ctx.reply(embed=embed)
+
+@bot.hybrid_command(name="brainscan", description="Deep scan: Ingests ALL historical text chats across the entire server.")
+@commands.has_permissions(manage_guild=True)
+async def brainscan(ctx: commands.Context):
+    """Scans every text channel completely from top to bottom (limit=None)."""
+    if ctx.interaction:
+        await ctx.defer(ephemeral=True)
+        await ctx.followup.send("🧠⚡ **Deep BrainScan Initiated:** Scanning ALL text channels and every single historical message in the entire server. This may take a little while depending on server size...", ephemeral=True)
+    else:
+        await ctx.send("🧠⚡ **Deep BrainScan Initiated:** Scanning ALL text channels and every single historical message in the entire server. This may take a little while...")
+
+    data = load_data()
+    scanned_count = 0
+
+    for channel in ctx.guild.text_channels:
+        try:
+            # limit=None pulls the entire chat history of the channel
+            async for msg in channel.history(limit=None):
+                if msg.author.bot or not msg.content.strip():
+                    continue
+                
+                # Check for duplicates
+                exists = any(m["content"] == msg.content and m["user_id"] == str(msg.author.id) for m in data["message_archive"])
+                if not exists:
+                    data["message_archive"].append({
+                        "content": msg.content,
+                        "author": msg.author.display_name,
+                        "user_id": str(msg.author.id),
+                        "channel": channel.name,
+                        "timestamp": msg.created_at.strftime("%Y-%m-%d %H:%M")
+                    })
+                    # Feed into structural Markov trigram matrix
+                    learn_sentence_trigrams(data, msg.content, msg.author.id)
+                    scanned_count += 1
+        except Exception as e:
+            print(f"Error scanning channel {channel.name}: {e}")
+
+    save_data(data)
+    
+    result_msg = f"🧠⚡ **Deep BrainScan Complete!** Successfully ingested and indexed **{scanned_count:,}** historical messages across all server channels into `server_lore.json`."
+    if ctx.interaction:
+        await ctx.followup.send(result_msg, ephemeral=True)
+    else:
+        await ctx.send(result_msg)
+
+@bot.hybrid_command(name="brainsearch", description="Searches the bot's archived message memory for keywords.")
+async def brainsearch(ctx: commands.Context, *, query: str):
+    """Searches archived messages for matching terms."""
+    data = load_data()
+    query_lower = query.lower()
+    
+    matches = [m for m in data["message_archive"] if query_lower in m["content"].lower()]
+    
+    if not matches:
+        reply_text = f"❌ No archived messages found matching **'{query}'**."
+        if ctx.interaction:
+            await ctx.reply(reply_text, ephemeral=True)
+        else:
+            await ctx.reply(reply_text)
+        return
+
+    # Take up to the top 5 most recent matches
+    matches = matches[-5:]
+    
+    embed = discord.Embed(title=f"🔎 BrainSearch Results: '{query}'", color=discord.Color.green())
+    for m in matches:
+        embed.add_field(
+            name=f"From {m['author']} (#{m['channel']} at {m['timestamp']})",
+            value=m['content'],
+            inline=False
+        )
+        
     if ctx.interaction:
         await ctx.reply(embed=embed, ephemeral=True)
     else:
