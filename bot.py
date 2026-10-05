@@ -214,10 +214,14 @@ async def on_message(message):
 
 @bot.hybrid_command(name="mimic", description="Generates a complex text string based on server learning.")
 async def mimic(ctx: commands.Context):
-    """Generates an AI response. Visible ONLY to the user who ran it."""
+    """Generates an AI response. Visible ONLY to the user who ran it if run as a slash command."""
     data = load_data()
+    
+    # Generate the reply based on the user's history
     advanced_reply = generate_complex_ai_mimic(data, user_id=ctx.author.id)
-    await ctx.send(advanced_reply, ephemeral=True)
+    
+    # Using ctx.reply handles ephemeral correctly for BOTH slash commands and text prefix commands
+    await ctx.reply(advanced_reply, ephemeral=True)
 
 # Run the bot
 bot.run(os.getenv("TOKEN"))
