@@ -184,23 +184,9 @@ async def on_message(message):
     data = load_data()
     user_id = str(message.author.id)
     
-<<<<<<< HEAD
-=======
     # 1. Update activity matrix indexes & archive message for searching
->>>>>>> 675b6ad2f2f613e44ad1f082dc1a3918f2b1bb7b
     data["user_chat_counts"][user_id] = data["user_chat_counts"].get(user_id, 0) + 1
     
-<<<<<<< HEAD
-    if message.content.strip():
-        data["message_archive"].append({
-            "content": message.content,
-            "author": message.author.display_name,
-            "user_id": user_id,
-            "channel": message.channel.name,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
-        })
-
-=======
     if message.content.strip():
         data["message_archive"].append({
             "content": message.content,
@@ -211,7 +197,6 @@ async def on_message(message):
         })
 
     # 2. Extract syntactic structural insights live
->>>>>>> 675b6ad2f2f613e44ad1f082dc1a3918f2b1bb7b
     learn_sentence_trigrams(data, message.content, user_id)
     
     if len(message.content) > 25 and random.random() < 0.02:
@@ -234,10 +219,6 @@ async def on_message(message):
             advanced_reply = generate_complex_ai_mimic(data, user_id=target, seed_word=seed)
             await message.channel.send(advanced_reply)
 
-<<<<<<< HEAD
-=======
-# --- 🆕 HYBRID COMMAND ENGINE ---
->>>>>>> 675b6ad2f2f613e44ad1f082dc1a3918f2b1bb7b
 
 # ==========================================
 # 🚀 20 HYBRID COMMANDS (Prefix & Slash)
@@ -254,11 +235,16 @@ async def mimic(ctx: commands.Context):
 @bot.hybrid_command(name="stats", description="Displays the bot's neural matrix statistics.")
 async def stats(ctx: commands.Context):
     data = load_data()
+    total_trigrams = sum(len(v) for v in data["trigrams"].values())
+    total_quotes = len(data["quotes"])
+    total_users = len(data["user_chat_counts"])
+    total_archived = len(data["message_archive"])
+    
     embed = discord.Embed(title="🧠 Neural Brain Matrix Stats", color=discord.Color.blurple())
-    embed.add_field(name="Trigram Connections", value=f"{sum(len(v) for v in data['trigrams'].values()):,}", inline=True)
-    embed.add_field(name="Captured Quotes", value=f"{len(data['quotes']):,}", inline=True)
-    embed.add_field(name="Archived Messages", value=f"{len(data['message_archive']):,}", inline=True)
-    embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}", inline=True)
+    embed.add_field(name="Trigram Connections", value=f"{total_trigrams:,}", inline=True)
+    embed.add_field(name="Captured Quotes", value=f"{total_quotes:,}", inline=True)
+    embed.add_field(name="Archived Messages", value=f"{total_archived:,}", inline=True)
+    embed.add_field(name="Tracked Users", value=f"{total_users:,}", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
 # 3. /brainscan
@@ -272,7 +258,6 @@ async def brainscan(ctx: commands.Context):
         await ctx.send("🧠⚡ **Deep BrainScan Initiated:** Scanning entire server history...")
 
     data = load_data()
-<<<<<<< HEAD
     scanned_count = 0
     for channel in ctx.guild.text_channels:
         try:
@@ -302,19 +287,15 @@ async def brainscan(ctx: commands.Context):
 @bot.hybrid_command(name="brainsearch", description="Searches archived message memory for keywords.")
 async def brainsearch(ctx: commands.Context, *, query: str):
     data = load_data()
-    matches = [m for m in data["message_archive"] if query.lower() in m["content"].lower()]
+    query_lower = query.lower()
+    matches = [m for m in data["message_archive"] if query_lower in m["content"].lower()]
+    
     if not matches:
         return await ctx.reply(f"❌ No archived messages found matching **'{query}'**.", ephemeral=bool(ctx.interaction))
-=======
-    total_trigrams = sum(len(v) for v in data["trigrams"].values())
-    total_quotes = len(data["quotes"])
-    total_users = len(data["user_chat_counts"])
-    total_archived = len(data["message_archive"])
->>>>>>> 675b6ad2f2f613e44ad1f082dc1a3918f2b1bb7b
     
-<<<<<<< HEAD
+    matches = matches[-5:]
     embed = discord.Embed(title=f"🔎 BrainSearch Results: '{query}'", color=discord.Color.green())
-    for m in matches[-5:]:
+    for m in matches:
         embed.add_field(name=f"From {m['author']} (#{m['channel']} at {m['timestamp']})", value=m['content'], inline=False)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
@@ -348,13 +329,6 @@ async def chatleaderboard(ctx: commands.Context):
     counts = data.get("user_chat_counts", {})
     if not counts:
         return await ctx.reply("❌ No chat metrics recorded yet.", ephemeral=bool(ctx.interaction))
-=======
-    embed = discord.Embed(title="🧠 Neural Brain Matrix Stats", color=discord.Color.blurple())
-    embed.add_field(name="Trigram Connections", value=f"{total_trigrams:,}", inline=True)
-    embed.add_field(name="Captured Quotes", value=f"{total_quotes:,}", inline=True)
-    embed.add_field(name="Archived Messages", value=f"{total_archived:,}", inline=True)
-    embed.add_field(name="Tracked Users", value=f"{total_users:,}", inline=True)
->>>>>>> 675b6ad2f2f613e44ad1f082dc1a3918f2b1bb7b
     
     sorted_users = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
     embed = discord.Embed(title="🏆 Server Chat Activity Leaderboard", color=discord.Color.orange())
@@ -483,14 +457,16 @@ async def roll(ctx: commands.Context, maximum: int = 100):
 async def poll(ctx: commands.Context, *, question: str):
     embed = discord.Embed(title="📊 Server Poll", description=question, color=discord.Color.blue())
     embed.set_footer(text=f"Poll created by {ctx.author.display_name}")
-    msg = await ctx.send(embed=embed) if not ctx.interaction else await ctx.interaction.response.send_message(embed=embed)
-    # If using interaction, fetch original response to add reactions
+    
     if ctx.interaction:
+        await ctx.interaction.response.send_message(embed=embed)
         msg = await ctx.interaction.original_response()
+    else:
+        msg = await ctx.send(embed=embed)
+        
     await msg.add_reaction("👍")
     await msg.add_reaction("👎")
 
-<<<<<<< HEAD
 # 20. /matrixhealth
 @bot.hybrid_command(name="matrixhealth", description="Performs a diagnostics check on brain matrix integrity.")
 async def matrixhealth(ctx: commands.Context):
@@ -502,84 +478,5 @@ async def matrixhealth(ctx: commands.Context):
     embed.add_field(name="JSON Schema Check", value="Passed ✅", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
-
-=======
-@bot.hybrid_command(name="brainscan", description="Deep scan: Ingests ALL historical text chats across the entire server.")
-@commands.has_permissions(manage_guild=True)
-async def brainscan(ctx: commands.Context):
-    """Scans every text channel completely from top to bottom (limit=None)."""
-    if ctx.interaction:
-        await ctx.defer(ephemeral=True)
-        await ctx.followup.send("🧠⚡ **Deep BrainScan Initiated:** Scanning ALL text channels and every single historical message in the entire server. This may take a little while depending on server size...", ephemeral=True)
-    else:
-        await ctx.send("🧠⚡ **Deep BrainScan Initiated:** Scanning ALL text channels and every single historical message in the entire server. This may take a little while...")
-
-    data = load_data()
-    scanned_count = 0
-
-    for channel in ctx.guild.text_channels:
-        try:
-            # limit=None pulls the entire chat history of the channel
-            async for msg in channel.history(limit=None):
-                if msg.author.bot or not msg.content.strip():
-                    continue
-                
-                # Check for duplicates
-                exists = any(m["content"] == msg.content and m["user_id"] == str(msg.author.id) for m in data["message_archive"])
-                if not exists:
-                    data["message_archive"].append({
-                        "content": msg.content,
-                        "author": msg.author.display_name,
-                        "user_id": str(msg.author.id),
-                        "channel": channel.name,
-                        "timestamp": msg.created_at.strftime("%Y-%m-%d %H:%M")
-                    })
-                    # Feed into structural Markov trigram matrix
-                    learn_sentence_trigrams(data, msg.content, msg.author.id)
-                    scanned_count += 1
-        except Exception as e:
-            print(f"Error scanning channel {channel.name}: {e}")
-
-    save_data(data)
-    
-    result_msg = f"🧠⚡ **Deep BrainScan Complete!** Successfully ingested and indexed **{scanned_count:,}** historical messages across all server channels into `server_lore.json`."
-    if ctx.interaction:
-        await ctx.followup.send(result_msg, ephemeral=True)
-    else:
-        await ctx.send(result_msg)
-
-@bot.hybrid_command(name="brainsearch", description="Searches the bot's archived message memory for keywords.")
-async def brainsearch(ctx: commands.Context, *, query: str):
-    """Searches archived messages for matching terms."""
-    data = load_data()
-    query_lower = query.lower()
-    
-    matches = [m for m in data["message_archive"] if query_lower in m["content"].lower()]
-    
-    if not matches:
-        reply_text = f"❌ No archived messages found matching **'{query}'**."
-        if ctx.interaction:
-            await ctx.reply(reply_text, ephemeral=True)
-        else:
-            await ctx.reply(reply_text)
-        return
-
-    # Take up to the top 5 most recent matches
-    matches = matches[-5:]
-    
-    embed = discord.Embed(title=f"🔎 BrainSearch Results: '{query}'", color=discord.Color.green())
-    for m in matches:
-        embed.add_field(
-            name=f"From {m['author']} (#{m['channel']} at {m['timestamp']})",
-            value=m['content'],
-            inline=False
-        )
-        
-    if ctx.interaction:
-        await ctx.reply(embed=embed, ephemeral=True)
-    else:
-        await ctx.reply(embed=embed)
-
->>>>>>> 675b6ad2f2f613e44ad1f082dc1a3918f2b1bb7b
 # Run the bot
 bot.run(os.getenv("TOKEN"))
