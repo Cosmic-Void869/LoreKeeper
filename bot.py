@@ -17,7 +17,12 @@ intents.reactions = True
 intents.members = True 
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-DATA_FILE = "advanced_brain_matrix.json"
+
+# Change the data file to server_lore.json
+DATA_FILE = "server_lore.json"
+
+# Your specific Test Server ID for instant slash command syncing
+TEST_GUILD_ID = discord.Object(id=1551157172589690982)
 
 # Add any custom phrases you want your bot to skip entirely during learning
 WORD_BLACKLIST = ["token", "password", "secret", "https://", "http://"]
@@ -155,8 +160,10 @@ def generate_complex_ai_mimic(data, user_id=None, seed_word=None, max_words=20):
 async def on_ready():
     print(f"👑 MAX-POWER V4.0 AI LORE CLONE ONLINE: {bot.user.name} (ID: {bot.user.id})")
     try:
-        await bot.tree.sync()
-        print("Slash commands synced globally!")
+        # Instantly sync to your specific test server
+        bot.tree.copy_global_to(guild=TEST_GUILD_ID)
+        await bot.tree.sync(guild=TEST_GUILD_ID)
+        print("Slash commands synced instantly to your server!")
     except Exception as e:
         print(f"Sync error: {e}")
     if not status_rotator.is_running():
@@ -221,7 +228,6 @@ async def mimic(ctx: commands.Context):
     data = load_data()
     advanced_reply = generate_complex_ai_mimic(data, user_id=ctx.author.id)
     
-    # Safely handle ephemeral response (only works for slash commands, not prefix commands)
     if ctx.interaction:
         await ctx.reply(advanced_reply, ephemeral=True)
     else:
