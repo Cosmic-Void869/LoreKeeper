@@ -161,7 +161,6 @@ async def on_ready():
         print(f"Sync error: {e}")
     if not status_rotator.is_running():
         status_rotator.start()
-
 @tasks.loop(minutes=10)
 async def status_rotator():
     """Reflects highly precise live calculated linguistic connections on status loop."""
