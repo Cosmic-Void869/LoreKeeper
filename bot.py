@@ -273,7 +273,6 @@ async def stats(ctx: commands.Context):
 
 # 3. /brainscan
 @bot.hybrid_command(name="brainscan", description="Deep scan: Ingests ALL historical text chats across the server.")
-@commands.has_permissions(manage_guild=True)
 async def brainscan(ctx: commands.Context):
     if ctx.interaction:
         await ctx.defer(ephemeral=True)
