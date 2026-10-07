@@ -1,24 +1,24 @@
 # LoreKeeper
 
-A Discord bot that learns server culture through message analysis and generates AI-mimicked responses using Markov chain trigrams.
+LoreKeeper is a Discord bot that learns from server activity, stores lore and quotes, and generates AI-style responses based on message patterns. It tracks chat activity, archived messages, emoji usage, and user-specific language behavior.
 
 ## Features
 
-- Neural Learning: Analyzes server messages to build language patterns
-- AI Mimicry: Generates contextual responses based on server history
-- Server Lore: Captures and archives memorable quotes
-- Statistics: Track emoji usage, chat activity, and user profiles
-- Commands: Includes several server utility commands
+- Message learning and trigram-based text generation
+- Quote capture and lore archive
+- User activity leaderboard
+- Emoji statistics
+- Server memory search
+- Slash commands and prefix commands
+- Admin tools for scanning and resetting bot data
 
 ## Requirements
 
 - Python 3.11+
-- Discord.py 2.4.0
-- python-dotenv
-- audioop-lts
-- A Discord bot token
+- Discord bot token
+- A Discord server where the bot can be invited
 
-## Setup
+## Local Setup
 
 ### 1. Clone the repository
 
