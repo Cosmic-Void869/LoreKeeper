@@ -507,7 +507,7 @@ async def stats(ctx: commands.Context):
     embed.add_field(name="Trigram Connections", value=f"{sum(len(v) for v in data['trigrams'].values()):,}", inline=True)
     embed.add_field(name="Captured Quotes", value=f"{len(data['quotes']):,}", inline=True)
     embed.add_field(name="Archived Messages", value=f"{len(data['message_archive']):,}", inline=True)
-    embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}\", inline=True)
+embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}\", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
 @bot.hybrid_command(name="brainscan", description="Scan recent server history")
