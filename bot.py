@@ -4,41 +4,69 @@ import logging
 import os
 import random
 import re
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Optional
 
 import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
-# ------------------------------------------------------------
-# Load environment
-# ------------------------------------------------------------
+# ============================================================
+# Environment & Logging Setup
+# ============================================================
 load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("lorekeeper.log"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger("lorekeeper")
 
-# ------------------------------------------------------------
-# Configuration
-# ------------------------------------------------------------
-TOKEN = os.getenv("TOKEN")
-GUILD_ID = os.getenv("GUILD_ID")
-ENABLE_RANDOM_RESPONSES = os.getenv("ENABLE_RANDOM_RESPONSES", "false").lower() in ("1", "true", "yes")
-RANDOM_REPLY_CHANCE = float(os.getenv("RANDOM_REPLY_CHANCE", "0.04"))
-MAX_MESSAGE_ARCHIVE = int(os.getenv("MAX_MESSAGE_ARCHIVE", "5000"))
-MAX_SCAN_MESSAGES = int(os.getenv("MAX_SCAN_MESSAGES", "200"))
-MAX_SCAN_CHANNELS = int(os.getenv("MAX_SCAN_CHANNELS", "10"))
-HISTORY_DAYS = int(os.getenv("HISTORY_DAYS", "30"))
-DATA_FILE = Path(os.getenv("DATA_FILE", "server_lore.json"))
-BACKUP_FILE = Path(os.getenv("BACKUP_FILE", "server_lore.backup.json"))
+# ============================================================
+# Configuration & Validation
+# ============================================================
+def load_config():
+    """Load and validate all configuration from environment."""
+    config = {
+        "token": os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN"),
+        "guild_id": os.getenv("GUILD_ID"),
+        "enable_random_responses": os.getenv("ENABLE_RANDOM_RESPONSES", "false").lower() in ("1", "true", "yes"),
+        "random_reply_chance": float(os.getenv("RANDOM_REPLY_CHANCE", "0.04")),
+        "max_message_archive": int(os.getenv("MAX_MESSAGE_ARCHIVE", "5000")),
+        "max_scan_messages": int(os.getenv("MAX_SCAN_MESSAGES", "200")),
+        "max_scan_channels": int(os.getenv("MAX_SCAN_CHANNELS", "10")),
+        "history_days": int(os.getenv("HISTORY_DAYS", "30")),
+        "data_file": Path(os.getenv("DATA_FILE", "server_lore.json")),
+        "backup_file": Path(os.getenv("BACKUP_FILE", "server_lore.backup.json")),
+        "command_cooldown": int(os.getenv("COMMAND_COOLDOWN", "3")),
+    }
 
-# ------------------------------------------------------------
-# Intents
-# ------------------------------------------------------------
+    # Validate critical config
+    if not config["token"]:
+        logger.error("❌ Missing TOKEN or DISCORD_TOKEN environment variable")
+        sys.exit(1)
+
+    if config["random_reply_chance"] < 0 or config["random_reply_chance"] > 1:
+        logger.error("❌ RANDOM_REPLY_CHANCE must be between 0 and 1")
+        sys.exit(1)
+
+    if config["max_message_archive"] < 100:
+        logger.warning("⚠️  MAX_MESSAGE_ARCHIVE is very low (<100)")
+
+    logger.info("✅ Configuration loaded successfully")
+    return config
+
+CONFIG = load_config()
+
+# ============================================================
+# Discord Setup
+# ============================================================
 intents = discord.Intents.default()
 intents.message_content = True
 intents.reactions = True
@@ -46,19 +74,21 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 
-# ------------------------------------------------------------
-# Runtime state
-# ------------------------------------------------------------
-_DATA_CACHE = None
+# ============================================================
+# Runtime State
+# ============================================================
+_DATA_CACHE: Optional[dict] = None
 _DATA_LOCK = asyncio.Lock()
+_COMMAND_COOLDOWNS = {}
 _LAST_RANDOM_REPLY = {}
 
 WORD_BLACKLIST = ["token", "password", "secret", "https://", "http://"]
 
-# ------------------------------------------------------------
-# Utility functions
-# ------------------------------------------------------------
-def default_schema():
+# ============================================================
+# Utility Functions
+# ============================================================
+def default_schema() -> dict:
+    """Return the default data schema."""
     return {
         "quotes": [],
         "lore": {},
@@ -67,56 +97,80 @@ def default_schema():
         "trigrams": {},
         "user_trigrams": {},
         "message_archive": [],
+        "last_updated": datetime.now().isoformat(),
     }
 
-def ensure_schema(data):
+def ensure_schema(data: dict) -> dict:
+    """Ensure all required schema keys exist."""
     schema = default_schema()
     for key, val in schema.items():
         data.setdefault(key, val)
     return data
 
+def check_command_cooldown(user_id: int, cooldown_seconds: int = CONFIG["command_cooldown"]) -> bool:
+    """Check if a user is on cooldown."""
+    now = datetime.now()
+    last_used = _COMMAND_COOLDOWNS.get(user_id)
+
+    if last_used is None or (now - last_used).total_seconds() >= cooldown_seconds:
+        _COMMAND_COOLDOWNS[user_id] = now
+        return False
+    return True
+
 def backup_file(src: Path, dst: Path):
+    """Create a backup of the source file."""
     try:
         if src.exists():
             dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            logger.debug(f"Backup created: {dst}")
     except Exception as exc:
         logger.warning(f"Could not create backup file: {exc}")
 
-def atomic_write_json(path: Path, data):
+def atomic_write_json(path: Path, data: dict):
+    """Write JSON atomically using a temp file."""
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     try:
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=4, ensure_ascii=False)
         os.replace(tmp_path, path)
+        logger.debug(f"Data saved to {path}")
     except Exception as exc:
-        logger.exception(f"Failed to write {path}: {exc}")
+        logger.error(f"Failed to write {path}: {exc}")
+        if tmp_path.exists():
+            tmp_path.unlink()
         raise
 
-def load_data():
-    """Load the data file once and keep it in memory."""
+def load_data() -> dict:
+    """Load data from file into memory cache."""
     global _DATA_CACHE
 
     if _DATA_CACHE is not None:
         return _DATA_CACHE
 
-    if not DATA_FILE.exists():
+    if not CONFIG["data_file"].exists():
+        logger.info("Creating new data file")
         _DATA_CACHE = default_schema()
         return _DATA_CACHE
 
     try:
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
+        with open(CONFIG["data_file"], "r", encoding="utf-8") as f:
             data = json.load(f)
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning(f"Failed to load data file, creating fresh schema: {exc}")
+            logger.info("Data loaded successfully")
+    except json.JSONDecodeError as exc:
+        logger.error(f"Corrupted data file: {exc}")
+        backup_file(CONFIG["data_file"], CONFIG["backup_file"])
         _DATA_CACHE = default_schema()
-        backup_file(DATA_FILE, BACKUP_FILE)
+        return _DATA_CACHE
+    except OSError as exc:
+        logger.error(f"Could not read data file: {exc}")
+        _DATA_CACHE = default_schema()
         return _DATA_CACHE
 
     _DATA_CACHE = ensure_schema(data)
     return _DATA_CACHE
 
-def save_data(data=None):
-    """Synchronous save for fallback/non-async calls."""
+def save_data(data: Optional[dict] = None):
+    """Synchronous save (fallback)."""
     global _DATA_CACHE
 
     if data is not None:
@@ -126,13 +180,13 @@ def save_data(data=None):
         return
 
     try:
-        backup_file(DATA_FILE, BACKUP_FILE)
-        atomic_write_json(DATA_FILE, _DATA_CACHE)
+        backup_file(CONFIG["data_file"], CONFIG["backup_file"])
+        atomic_write_json(CONFIG["data_file"], _DATA_CACHE)
     except Exception as exc:
-        logger.exception(f"save_data failed: {exc}")
+        logger.error(f"save_data failed: {exc}")
 
-async def save_data_async(data=None):
-    """Async save with lock to reduce race conditions."""
+async def save_data_async(data: Optional[dict] = None):
+    """Async save with lock for safety."""
     global _DATA_CACHE
 
     if data is not None:
@@ -143,22 +197,28 @@ async def save_data_async(data=None):
 
     async with _DATA_LOCK:
         try:
-            backup_file(DATA_FILE, BACKUP_FILE)
-            atomic_write_json(DATA_FILE, _DATA_CACHE)
+            _DATA_CACHE["last_updated"] = datetime.now().isoformat()
+            backup_file(CONFIG["data_file"], CONFIG["backup_file"])
+            atomic_write_json(CONFIG["data_file"], _DATA_CACHE)
         except Exception as exc:
-            logger.exception(f"save_data_async failed: {exc}")
+            logger.error(f"save_data_async failed: {exc}")
 
-def prune_message_archive(data):
-    if len(data["message_archive"]) > MAX_MESSAGE_ARCHIVE:
-        data["message_archive"] = data["message_archive"][-MAX_MESSAGE_ARCHIVE:]
+def prune_message_archive(data: dict) -> dict:
+    """Prune message archive to max size."""
+    if len(data["message_archive"]) > CONFIG["max_message_archive"]:
+        removed = len(data["message_archive"]) - CONFIG["max_message_archive"]
+        data["message_archive"] = data["message_archive"][-CONFIG["max_message_archive"]:]
+        logger.info(f"Pruned {removed} old messages from archive")
     return data
 
-def clean_token(token):
+def clean_token(token: str) -> str:
+    """Clean and validate a token."""
     if any(blacklisted in token for blacklisted in WORD_BLACKLIST):
         return ""
     return token.strip(".,!?\"()[]{}*<>~`").lower()
 
-def learn_sentence_trigrams(data, text, user_id=None):
+def learn_sentence_trigrams(data: dict, text: str, user_id: Optional[int] = None):
+    """Learn trigrams from text."""
     raw_tokens = text.split()
     tokens = [clean_token(t) for t in raw_tokens if clean_token(t)]
 
@@ -175,30 +235,31 @@ def learn_sentence_trigrams(data, text, user_id=None):
             _append_trigram(data, key, tokens[1], user_id)
         return
 
-    user_id = str(user_id) if user_id else None
+    user_id_str = str(user_id) if user_id else None
 
-    _append_trigram(data, "__start__ __start__", tokens[0], user_id)
-    _append_trigram(data, f"__start__ {tokens[0]}", tokens[1], user_id)
+    _append_trigram(data, "__start__ __start__", tokens[0], user_id_str)
+    _append_trigram(data, f"__start__ {tokens[0]}", tokens[1], user_id_str)
 
     for i in range(len(tokens) - 2):
         w1, w2, w3 = tokens[i], tokens[i + 1], tokens[i + 2]
         key = f"{w1} {w2}"
-        _append_trigram(data, key, w3, user_id)
+        _append_trigram(data, key, w3, user_id_str)
 
-def _append_trigram(data, key, value, user_id=None):
+def _append_trigram(data: dict, key: str, value: str, user_id: Optional[str] = None):
+    """Append a trigram to the data structure."""
     if key not in data["trigrams"]:
         data["trigrams"][key] = []
     data["trigrams"][key].append(value)
 
     if user_id:
-        user_id = str(user_id)
         if user_id not in data["user_trigrams"]:
             data["user_trigrams"][user_id] = {}
         if key not in data["user_trigrams"][user_id]:
             data["user_trigrams"][user_id][key] = []
         data["user_trigrams"][user_id][key].append(value)
 
-def generate_complex_ai_mimic(data, user_id=None, seed_word=None, max_words=20):
+def generate_complex_ai_mimic(data: dict, user_id: Optional[int] = None, seed_word: Optional[str] = None, max_words: int = 20) -> str:
+    """Generate AI-mimicked text using trigrams."""
     pool = data["trigrams"]
     if user_id and str(user_id) in data["user_trigrams"]:
         pool = data["user_trigrams"][str(user_id)]
@@ -254,64 +315,75 @@ def generate_complex_ai_mimic(data, user_id=None, seed_word=None, max_words=20):
     response = " ".join(sentence).capitalize()
     return response + random.choice(flavor_elements)
 
-# ------------------------------------------------------------
-# Async tasks
-# ------------------------------------------------------------
+# ============================================================
+# Background Tasks
+# ============================================================
 @tasks.loop(minutes=5)
 async def auto_save_task():
-    """Persist data periodically."""
-    data = load_data()
-    await save_data_async(prune_message_archive(data))
+    """Save data periodically."""
+    try:
+        data = load_data()
+        data = prune_message_archive(data)
+        await save_data_async(data)
+    except Exception as exc:
+        logger.error(f"Auto-save task failed: {exc}")
 
 @tasks.loop(minutes=10)
 async def status_rotator():
-    data = load_data()
-    total_connections = sum(len(v) for v in data["trigrams"].values())
-    await bot.change_presence(activity=discord.CustomActivity(name=f"🧠 Processing {total_connections} structural layers | /help"))
+    """Update bot status."""
+    try:
+        data = load_data()
+        total_connections = sum(len(v) for v in data["trigrams"].values())
+        status_text = f"🧠 Processing {total_connections} layers | /help"
+        await bot.change_presence(activity=discord.CustomActivity(name=status_text))
+    except Exception as exc:
+        logger.error(f"Status rotator failed: {exc}")
 
-# ------------------------------------------------------------
-# Bot events
-# ------------------------------------------------------------
+# ============================================================
+# Bot Events
+# ============================================================
 @bot.event
 async def on_ready():
-    logger.info(f"Bot started: {bot.user.name} ({bot.user.id})")
+    """Bot is ready."""
+    logger.info(f"✅ Bot online: {bot.user.name} ({bot.user.id})")
 
-    if TOKEN is None:
-        logger.error("TOKEN environment variable is missing.")
-        return
-
-    # Sync commands to a specific guild only if configured
+    # Sync commands
     guild = None
-    if GUILD_ID:
+    if CONFIG["guild_id"]:
         try:
-            guild = bot.get_guild(int(GUILD_ID))
-        except (TypeError, ValueError):
-            guild = None
-
-    if guild:
-        try:
-            bot.tree.copy_global_to(guild=guild)
-            await bot.tree.sync(guild=guild)
-            logger.info(f"Slash commands synced to guild {guild.id}")
-        except Exception as exc:
-            logger.exception(f"Failed to sync commands: {exc}")
+            guild = bot.get_guild(int(CONFIG["guild_id"]))
+            if guild:
+                bot.tree.copy_global_to(guild=guild)
+                await bot.tree.sync(guild=guild)
+                logger.info(f"✅ Commands synced to guild {guild.id}")
+            else:
+                logger.warning(f"Guild {CONFIG['guild_id']} not found, syncing globally")
+                await bot.tree.sync()
+        except (TypeError, ValueError) as exc:
+            logger.error(f"Invalid GUILD_ID: {exc}")
+            await bot.tree.sync()
     else:
         try:
             await bot.tree.sync()
-            logger.info("Slash commands synced globally")
+            logger.info("✅ Commands synced globally")
         except Exception as exc:
-            logger.exception(f"Failed to sync global commands: {exc}")
+            logger.error(f"Failed to sync commands: {exc}")
 
+    # Start background tasks
     if not status_rotator.is_running():
         status_rotator.start()
+        logger.info("🔄 Status rotator started")
 
     if not auto_save_task.is_running():
         auto_save_task.start()
+        logger.info("💾 Auto-save task started")
 
+    # Preload data
     load_data()
 
 @bot.event
-async def on_message(message):
+async def on_message(message: discord.Message):
+    """Process incoming messages."""
     if message.author.bot:
         return
 
@@ -322,8 +394,10 @@ async def on_message(message):
     data = load_data()
     user_id = str(message.author.id)
 
+    # Track user activity
     data["user_chat_counts"][user_id] = data["user_chat_counts"].get(user_id, 0) + 1
 
+    # Archive message
     if message.content.strip():
         data["message_archive"].append({
             "content": message.content,
@@ -333,98 +407,105 @@ async def on_message(message):
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
         })
 
-    learn_sentence_trigrams(data, message.content, user_id)
+    # Learn from message
+    learn_sentence_trigrams(data, message.content, message.author.id)
     prune_message_archive(data)
 
-    # Prevent random spam unless explicitly enabled
-    if ENABLE_RANDOM_RESPONSES:
+    # Optional: Random responses (only if enabled)
+    if CONFIG["enable_random_responses"]:
         channel_key = str(message.channel.id)
         now = datetime.now()
         last_reply = _LAST_RANDOM_REPLY.get(channel_key)
+
         if last_reply is None or (now - last_reply).total_seconds() >= 60:
-            if len(message.content) > 25 and random.random() < RANDOM_REPLY_CHANCE:
-                if not any(q['text'] == message.content for q in data["quotes"]):
+            if len(message.content) > 25 and random.random() < CONFIG["random_reply_chance"]:
+                if not any(q["text"] == message.content for q in data["quotes"]):
                     data["quotes"].append({
                         "text": message.content,
-                        "added_by": f"{message.author.display_name} (Calculated Lore Capture 🤖)",
+                        "added_by": f"{message.author.display_name} (Auto-Captured 🤖)",
                         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
                     })
                     await message.add_reaction("👑")
 
-            if random.random() < RANDOM_REPLY_CHANCE and len(data["trigrams"]) > 25:
+            if random.random() < CONFIG["random_reply_chance"] and len(data["trigrams"]) > 25:
                 async with message.channel.typing():
                     await asyncio.sleep(random.uniform(0.6, 1.8))
                     potential_seeds = [w for w in message.content.split() if len(w) > 3]
                     seed = random.choice(potential_seeds) if potential_seeds else None
                     target = random.choice([None, user_id])
-                    advanced_reply = generate_complex_ai_mimic(data, user_id=target, seed_word=seed)
-                    await message.channel.send(advanced_reply)
+                    reply = generate_complex_ai_mimic(data, user_id=target, seed_word=seed)
+                    await message.channel.send(reply)
                     _LAST_RANDOM_REPLY[channel_key] = now
 
     await bot.process_commands(message)
     await save_data_async(data)
 
-# ------------------------------------------------------------
-# Helper commands
-# ------------------------------------------------------------
-@bot.hybrid_command(name="help", description="Displays all available commands and what they do.")
+@bot.event
+async def on_error(event, *args, **kwargs):
+    """Handle bot errors."""
+    logger.exception(f"Error in {event}")
+
+# ============================================================
+# Commands
+# ============================================================
+@bot.hybrid_command(name="help", description="View all available commands")
 async def help_command(ctx: commands.Context):
+    """Display help."""
     embed = discord.Embed(
-        title="👑 aLore keeper — Command Matrix",
-        description="Here are all available features. You can use them via slash commands (`/`) or prefix (`!`).",
+        title="👑 LoreKeeper — Command Matrix",
+        description="Use slash commands (`/`) or prefix (`!`)",
         color=discord.Color.gold()
     )
 
-    for command in sorted(bot.tree.get_commands(), key=lambda c: c.name):
-        embed.add_field(
-            name=f"/{command.name}",
-            value=command.description or "No description provided.",
-            inline=False
-        )
+    for cmd in sorted(bot.tree.get_commands(), key=lambda c: c.name):
+        embed.add_field(name=f"/{cmd.name}", value=cmd.description or "No description", inline=False)
 
-    embed.set_footer(text="aLore keeper v4.2 • Powered by Neural Trigram Matrices")
+    embed.set_footer(text="LoreKeeper v5.0 • Production Ready")
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="mimic", description="Generates a complex text string based on server learning.")
+@bot.hybrid_command(name="mimic", description="Generate an AI response")
+@commands.cooldown(1, CONFIG["command_cooldown"], commands.BucketType.user)
 async def mimic(ctx: commands.Context):
+    """Generate mimicked text."""
     data = load_data()
     reply = generate_complex_ai_mimic(data, user_id=ctx.author.id)
     await ctx.reply(reply, ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="stats", description="Displays the bot's neural matrix statistics.")
+@bot.hybrid_command(name="stats", description="View neural matrix statistics")
 async def stats(ctx: commands.Context):
+    """Show statistics."""
     data = load_data()
-    embed = discord.Embed(title="🧠 Neural Brain Matrix Stats", color=discord.Color.blurple())
+    embed = discord.Embed(title="🧠 Neural Matrix Stats", color=discord.Color.blurple())
     embed.add_field(name="Trigram Connections", value=f"{sum(len(v) for v in data['trigrams'].values()):,}", inline=True)
     embed.add_field(name="Captured Quotes", value=f"{len(data['quotes']):,}", inline=True)
     embed.add_field(name="Archived Messages", value=f"{len(data['message_archive']):,}", inline=True)
     embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="brainscan", description="Deep scan: ingest recent historical text chats from this server.")
+@bot.hybrid_command(name="brainscan", description="Scan recent server history")
+@commands.has_permissions(administrator=True)
+@commands.cooldown(1, 300, commands.BucketType.user)
 async def brainscan(ctx: commands.Context):
-    if not ctx.author.guild_permissions.administrator:
-        return await ctx.reply("❌ Only admins can run a full brain scan.", ephemeral=bool(ctx.interaction))
-
+    """Scan server history."""
     data = load_data()
 
     if ctx.interaction:
         await ctx.defer(ephemeral=True)
-        await ctx.followup.send("🧠⚡ **Deep BrainScan Initiated:** scanning recent server history...", ephemeral=True)
+        await ctx.followup.send("🧠⚡ Scanning recent server history...", ephemeral=True)
     else:
-        await ctx.send("🧠⚡ **Deep BrainScan Initiated:** scanning recent server history...")
+        await ctx.send("🧠⚡ Scanning recent server history...")
 
-    cutoff = datetime.now() - timedelta(days=HISTORY_DAYS)
+    cutoff = datetime.now() - timedelta(days=CONFIG["history_days"])
     scanned_count = 0
     scanned_channels = 0
 
-    for channel in ctx.guild.text_channels[:MAX_SCAN_CHANNELS]:
-        if scanned_channels >= MAX_SCAN_CHANNELS:
+    for channel in ctx.guild.text_channels[:CONFIG["max_scan_channels"]]:
+        if scanned_channels >= CONFIG["max_scan_channels"]:
             break
 
         try:
             scanned_channels += 1
-            async for msg in channel.history(limit=MAX_SCAN_MESSAGES, after=cutoff):
+            async for msg in channel.history(limit=CONFIG["max_scan_messages"], after=cutoff):
                 if msg.author.bot or not msg.content.strip():
                     continue
 
@@ -448,168 +529,87 @@ async def brainscan(ctx: commands.Context):
     data = prune_message_archive(data)
     await save_data_async(data)
 
-    msg_str = f"🧠⚡ **BrainScan Complete!** Indexed **{scanned_count:,}** recent messages across **{scanned_channels}** channels."
+    msg_str = f"🧠⚡ **BrainScan Complete!** Indexed **{scanned_count:,}** messages from **{scanned_channels}** channels."
     if ctx.interaction:
         await ctx.followup.send(msg_str, ephemeral=True)
     else:
         await ctx.send(msg_str)
 
-@bot.hybrid_command(name="brainsearch", description="Searches archived message memory for keywords.")
-async def brainsearch(ctx: commands.Context, *, query: str):
-    data = load_data()
-    matches = [m for m in data["message_archive"] if query.lower() in m["content"].lower()]
-    if not matches:
-        return await ctx.reply(f"❌ No archived messages found matching **'{query}'**.", ephemeral=bool(ctx.interaction))
-
-    embed = discord.Embed(title=f"🔎 BrainSearch Results: '{query}'", color=discord.Color.green())
-    for m in matches[-5:]:
-        embed.add_field(name=f"From {m['author']} (#{m['channel']} at {m['timestamp']})", value=m['content'], inline=False)
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="quote", description="Pulls a random legendary server quote.")
+@bot.hybrid_command(name="quote", description="Get a random server quote")
 async def quote(ctx: commands.Context):
+    """Pull a quote."""
     data = load_data()
     if not data["quotes"]:
         return await ctx.reply("❌ No quotes captured yet!", ephemeral=bool(ctx.interaction))
+    
     q = random.choice(data["quotes"])
-    embed = discord.Embed(title="👑 Legendary Lore Quote", description=f"\"{q['text']}\"", color=discord.Color.gold())
+    embed = discord.Embed(title="👑 Legendary Quote", description=f"\"{q['text']}\"", color=discord.Color.gold())
     embed.set_footer(text=f"Added by: {q['added_by']} | {q['timestamp']}")
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="addquote", description="Manually adds a quote to server lore.")
+@bot.hybrid_command(name="addquote", description="Add a quote to server lore")
+@commands.cooldown(1, 10, commands.BucketType.user)
 async def addquote(ctx: commands.Context, *, text: str):
+    """Add a quote."""
+    if len(text) > 1000:
+        return await ctx.reply("❌ Quote too long (max 1000 chars)", ephemeral=bool(ctx.interaction))
+    
     data = load_data()
     data["quotes"].append({
         "text": text,
-        "added_by": f"{ctx.author.display_name} (Manual Entry ✨)",
+        "added_by": f"{ctx.author.display_name} (Manual ✨)",
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
     })
     await save_data_async(data)
-    await ctx.reply(f"✅ Successfully archived quote: **\"{text}\"**", ephemeral=bool(ctx.interaction))
+    await ctx.reply(f"✅ Quote added!", ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="chatleaderboard", description="Shows the top most active chatters in the server.")
-async def chatleaderboard(ctx: commands.Context):
+@bot.hybrid_command(name="leaderboard", description="Top chatters")
+async def leaderboard(ctx: commands.Context):
+    """Show chat leaderboard."""
     data = load_data()
     counts = data.get("user_chat_counts", {})
     if not counts:
-        return await ctx.reply("❌ No chat metrics recorded yet.", ephemeral=bool(ctx.interaction))
+        return await ctx.reply("❌ No data yet.", ephemeral=bool(ctx.interaction))
 
     sorted_users = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title="🏆 Server Chat Activity Leaderboard", color=discord.Color.orange())
+    embed = discord.Embed(title="🏆 Chat Leaderboard", color=discord.Color.orange())
 
     desc = ""
     for idx, (uid, count) in enumerate(sorted_users, 1):
         member = ctx.guild.get_member(int(uid))
-        name = member.display_name if member else f"User ID: {uid}"
-        desc += f"**{idx}.** {name} — **{count:,}** messages\n"
+        name = member.display_name if member else f"User {uid}"
+        desc += f"**{idx}.** {name} — **{count:,}** msgs\n"
 
     embed.description = desc
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="emojistats", description="Shows the server's favorite and most-used emojis.")
-async def emojistats(ctx: commands.Context):
-    data = load_data()
-    emojis = data.get("server_emojis", {})
-    if not emojis:
-        return await ctx.reply("❌ No emojis tracked yet.", ephemeral=bool(ctx.interaction))
-
-    top_emojis = sorted(emojis.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title="📊 Server Emoji Matrix", color=discord.Color.magenta())
-    embed.description = "".join([f"{emo}: **{count}** uses\n" for emo, count in top_emojis])
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="userprofile", description="Inspects a user's matrix learning profile.")
-async def userprofile(ctx: commands.Context, member: discord.Member = None):
-    target = member or ctx.author
-    data = load_data()
-    uid = str(target.id)
-
-    chats = data.get("user_chat_counts", {}).get(uid, 0)
-    has_custom_matrix = uid in data.get("user_trigrams", {})
-    trigram_count = sum(len(v) for v in data.get("user_trigrams", {}).get(uid, {}).values()) if has_custom_matrix else 0
-
-    embed = discord.Embed(title=f"👤 Neural Profile: {target.display_name}", color=target.color)
-    embed.set_thumbnail(url=target.display_avatar.url)
-    embed.add_field(name="Total Messages Logged", value=f"{chats:,}", inline=True)
-    embed.add_field(name="Unique Trigram Nodes", value=f"{trigram_count:,}", inline=True)
-    embed.add_field(name="Custom Brain Clone", value="Active 🧠" if has_custom_matrix else "Standard Server Pool", inline=True)
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="roast", description="Generates a customized AI roast for a user.")
+@bot.hybrid_command(name="roast", description="Get an AI roast")
+@commands.cooldown(1, CONFIG["command_cooldown"], commands.BucketType.user)
 async def roast(ctx: commands.Context, member: discord.Member = None):
+    """Roast a user."""
     target = member or ctx.author
     data = load_data()
     roast_text = generate_complex_ai_mimic(data, user_id=target.id, max_words=12)
-    embed = discord.Embed(title=f"🔥 Neural Roast: {target.display_name}", description=f"\"{roast_text} fr smh\"\n— *AI Matrix Generator*", color=discord.Color.red())
+    embed = discord.Embed(title=f"🔥 Roast: {target.display_name}", description=f"\"{roast_text}\"", color=discord.Color.red())
     await ctx.reply(embed=embed)
 
-@bot.hybrid_command(name="hype", description="Generates ultra-energetic server hype text.")
-async def hype(ctx: commands.Context):
-    data = load_data()
-    hyped = generate_complex_ai_mimic(data, seed_word="let", max_words=15).upper()
-    await ctx.reply(f"🚀 **HYPE MATRIX ENGAGED:** {hyped} 🔥🔥🔥", ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="conspiracy", description="Formulates a random server conspiracy theory.")
-async def conspiracy(ctx: commands.Context):
-    data = load_data()
-    theory = generate_complex_ai_mimic(data, max_words=18)
-    embed = discord.Embed(title="🕵️‍♂️ Server Conspiracy Theory", description=f"\"Did you know that {theory.lower()}? Stay woke... 👁️\"", color=discord.Color.dark_purple())
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="asklore", description="Asks the bot's neural memory an open-ended lore question.")
-async def asklore(ctx: commands.Context, *, question: str):
-    data = load_data()
-    potential_seeds = [w for w in question.split() if len(w) > 3]
-    seed = random.choice(potential_seeds) if potential_seeds else None
-    answer = generate_complex_ai_mimic(data, seed_word=seed, max_words=16)
-
-    embed = discord.Embed(title="🤖 Neural Lore Inquiry", color=discord.Color.blurple())
-    embed.add_field(name="Question", value=question, inline=False)
-    embed.add_field(name="Matrix Answer", value=f"\"{answer}\"", inline=False)
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="clearmatrix", description="[Admin] Wipes and resets the bot's learning matrices.")
-@commands.has_permissions(administrator=True)
-async def clearmatrix(ctx: commands.Context):
-    global _DATA_CACHE
-    _DATA_CACHE = default_schema()
-    await save_data_async()
-    await ctx.reply("⚠️ **Neural matrix completely wiped and reset to factory settings!**", ephemeral=True)
-
-@bot.hybrid_command(name="exportlore", description="[Admin] Shows data export metrics and storage size.")
-@commands.has_permissions(administrator=True)
-async def exportlore(ctx: commands.Context):
-    size_bytes = DATA_FILE.stat().st_size if DATA_FILE.exists() else 0
-    await ctx.reply(f"📦 **Database File Size:** {size_bytes / 1024:.2f} KB (`{DATA_FILE}`)", ephemeral=True)
-
-@bot.hybrid_command(name="magic8", description="Answers a yes/no question using sarcastic Markov 8-ball logic.")
+@bot.hybrid_command(name="magic8", description="Ask the magic 8-ball")
 async def magic8(ctx: commands.Context, *, question: str):
+    """Magic 8-ball."""
     responses = [
         "It is decidedly so fr fr",
         "Outlook not so good tbh",
         "Most definitely lol",
-        "Ask again when matrix syncs smh",
         "Without a doubt lmao",
-        "My neural sources say no",
-        "Signs point to yes fr",
         "Better not tell you now 💀",
     ]
-    await ctx.reply(f"🎱 **Question:** {question}\n🔮 **Answer:** {random.choice(responses)}", ephemeral=bool(ctx.interaction))
+    await ctx.reply(f"🎱 **Q:** {question}\n🔮 **A:** {random.choice(responses)}", ephemeral=bool(ctx.interaction))
 
-@bot.hybrid_command(name="coinflip", description="Flips a coin with style.")
-async def coinflip(ctx: commands.Context):
-    result = random.choice(["Heads 🪙", "Tails 🪙"])
-    await ctx.reply(f"🎲 The coin landed on: **{result}**", ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="roll", description="Rolls a random number between 1 and 100.")
-async def roll(ctx: commands.Context, maximum: int = 100):
-    num = random.randint(1, maximum)
-    await ctx.reply(f"🎲 You rolled: **{num}** (Range: 1-{maximum})", ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="poll", description="Creates an instant reaction poll.")
+@bot.hybrid_command(name="poll", description="Create a reaction poll")
 async def poll(ctx: commands.Context, *, question: str):
-    embed = discord.Embed(title="📊 Server Poll", description=question, color=discord.Color.blue())
-    embed.set_footer(text=f"Poll created by {ctx.author.display_name}")
+    """Create a poll."""
+    embed = discord.Embed(title="📊 Poll", description=question, color=discord.Color.blue())
+    embed.set_footer(text=f"By {ctx.author.display_name}")
 
     if ctx.interaction:
         await ctx.interaction.response.send_message(embed=embed)
@@ -620,20 +620,41 @@ async def poll(ctx: commands.Context, *, question: str):
     await msg.add_reaction("👍")
     await msg.add_reaction("👎")
 
-@bot.hybrid_command(name="matrixhealth", description="Performs a diagnostics check on brain matrix integrity.")
-async def matrixhealth(ctx: commands.Context):
+@bot.hybrid_command(name="cleardata", description="[Admin] Wipe all data")
+@commands.has_permissions(administrator=True)
+async def cleardata(ctx: commands.Context):
+    """Clear all data."""
+    global _DATA_CACHE
+    _DATA_CACHE = default_schema()
+    await save_data_async()
+    logger.warning(f"Data cleared by {ctx.author}")
+    await ctx.reply("⚠️ All data cleared!", ephemeral=True)
+
+@bot.hybrid_command(name="health", description="Bot health check")
+async def health(ctx: commands.Context):
+    """Health check."""
     data = load_data()
-    status = "Optimal 🟢" if len(data["trigrams"]) > 10 else "Learning Phase 🟡"
-    embed = discord.Embed(title="🛠️ Matrix System Diagnostics", color=discord.Color.green())
-    embed.add_field(name="Brain Status", value=status, inline=True)
-    embed.add_field(name="Memory Schema Version", value="v4.2 Optimized Help", inline=True)
-    embed.add_field(name="JSON Schema Check", value="Passed ✅", inline=True)
+    status = "🟢 Optimal" if len(data["trigrams"]) > 10 else "🟡 Learning"
+    embed = discord.Embed(title="🛠️ System Health", color=discord.Color.green())
+    embed.add_field(name="Status", value=status, inline=True)
+    embed.add_field(name="Messages Archived", value=f"{len(data['message_archive']):,}", inline=True)
+    embed.add_field(name="Last Updated", value=data.get("last_updated", "N/A"), inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
-# ------------------------------------------------------------
+# ============================================================
 # Startup
-# ------------------------------------------------------------
+# ============================================================
 if __name__ == "__main__":
-    if TOKEN is None:
-        raise RuntimeError("Missing required environment variable: TOKEN")
-    bot.run(TOKEN)
+    try:
+        logger.info("🚀 Starting LoreKeeper bot...")
+        bot.run(CONFIG["token"])
+    except discord.LoginFailure:
+        logger.error("❌ Invalid Discord token")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot shutting down...")
+        save_data()
+        sys.exit(0)
+    except Exception as exc:
+        logger.exception(f"❌ Fatal error: {exc}")
+        sys.exit(1)
