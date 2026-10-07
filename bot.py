@@ -22,7 +22,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("lorekeeper.log"),
+        logging.FileHandler("/app/data/lorekeeper.log"),
         logging.StreamHandler(),
     ],
 )
@@ -33,6 +33,9 @@ logger = logging.getLogger("lorekeeper")
 # ============================================================
 def load_config():
     """Load and validate all configuration from environment."""
+    data_dir = Path(os.getenv("DATA_DIR", "/app/data"))
+    data_dir.mkdir(parents=True, exist_ok=True)
+
     config = {
         "token": os.getenv("TOKEN") or os.getenv("DISCORD_TOKEN"),
         "guild_id": os.getenv("GUILD_ID"),
@@ -42,8 +45,8 @@ def load_config():
         "max_scan_messages": int(os.getenv("MAX_SCAN_MESSAGES", "200")),
         "max_scan_channels": int(os.getenv("MAX_SCAN_CHANNELS", "10")),
         "history_days": int(os.getenv("HISTORY_DAYS", "30")),
-        "data_file": Path(os.getenv("DATA_FILE", "server_lore.json")),
-        "backup_file": Path(os.getenv("BACKUP_FILE", "server_lore.backup.json")),
+        "data_file": data_dir / "server_lore.json",
+        "backup_file": data_dir / "server_lore.backup.json",
         "command_cooldown": int(os.getenv("COMMAND_COOLDOWN", "3")),
     }
 
@@ -60,6 +63,7 @@ def load_config():
         logger.warning("⚠️  MAX_MESSAGE_ARCHIVE is very low (<100)")
 
     logger.info("✅ Configuration loaded successfully")
+    logger.info(f"📁 Data directory: {data_dir}")
     return config
 
 CONFIG = load_config()
@@ -671,7 +675,7 @@ async def health(ctx: commands.Context):
 if __name__ == "__main__":
     try:
         logger.info("🚀 Starting LoreKeeper bot...")
-        ensure_data_file()  # AUTO-CREATE server_lore.json HERE
+        ensure_data_file()
         logger.info("✅ Data file ready")
         bot.run(CONFIG["token"])
     except discord.LoginFailure:
