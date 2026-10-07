@@ -1,0 +1,15 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.env
+.env.local
+.vscode
+.idea
+*.log
+server_lore.json
+server_lore.backup.json
+.dockerignore
+README.md
