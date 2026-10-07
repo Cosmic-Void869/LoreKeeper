@@ -10,7 +10,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot.py .
 
-# Create volume mount point
-VOLUME /app/data
-
 CMD ["python", "bot.py"]
