@@ -507,61 +507,78 @@ async def stats(ctx: commands.Context):
     embed.add_field(name="Trigram Connections", value=f"{sum(len(v) for v in data['trigrams'].values()):,}", inline=True)
     embed.add_field(name="Captured Quotes", value=f"{len(data['quotes']):,}", inline=True)
     embed.add_field(name="Archived Messages", value=f"{len(data['message_archive']):,}", inline=True)
-    embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}", inline=True)
+    embed.add_field(name="Tracked Users", value=f"{len(data['user_chat_counts']):,}\", inline=True)
     await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
 
 @bot.hybrid_command(name="brainscan", description="Scan recent server history")
 @commands.has_permissions(administrator=True)
 @commands.cooldown(1, 300, commands.BucketType.user)
 async def brainscan(ctx: commands.Context):
-    """Scan server history."""
+    """Scan server history for learning."""
     data = load_data()
 
     if ctx.interaction:
         await ctx.defer(ephemeral=True)
-        await ctx.followup.send("🧠⚡ Scanning recent server history...", ephemeral=True)
+        await ctx.followup.send("🧠⚡ Scanning recent server history... (this may take a minute)", ephemeral=True)
     else:
-        await ctx.send("🧠⚡ Scanning recent server history...")
+        await ctx.send("🧠⚡ Scanning recent server history... (this may take a minute)")
 
     cutoff = datetime.now() - timedelta(days=CONFIG["history_days"])
     scanned_count = 0
     scanned_channels = 0
 
-    for channel in ctx.guild.text_channels[:CONFIG["max_scan_channels"]]:
-        if scanned_channels >= CONFIG["max_scan_channels"]:
-            break
+    try:
+        for channel in ctx.guild.text_channels[:CONFIG["max_scan_channels"]]:
+            if scanned_channels >= CONFIG["max_scan_channels"]:
+                break
 
-        try:
-            scanned_channels += 1
-            async for msg in channel.history(limit=CONFIG["max_scan_messages"], after=cutoff):
-                if msg.author.bot or not msg.content.strip():
-                    continue
+            try:
+                scanned_channels += 1
+                logger.info(f"Scanning channel: {channel.name}")
+                
+                async for msg in channel.history(limit=CONFIG["max_scan_messages"], after=cutoff):
+                    if msg.author.bot or not msg.content.strip():
+                        continue
 
-                exists = any(
-                    m["content"] == msg.content and m["user_id"] == str(msg.author.id)
-                    for m in data["message_archive"]
-                )
-                if not exists:
-                    data["message_archive"].append({
-                        "content": msg.content,
-                        "author": msg.author.display_name,
-                        "user_id": str(msg.author.id),
-                        "channel": channel.name,
-                        "timestamp": msg.created_at.strftime("%Y-%m-%d %H:%M")
-                    })
-                    learn_sentence_trigrams(data, msg.content, msg.author.id)
-                    scanned_count += 1
-        except Exception as exc:
-            logger.warning(f"Error scanning {channel.name}: {exc}")
+                    exists = any(
+                        m["content"] == msg.content and m["user_id"] == str(msg.author.id)
+                        for m in data["message_archive"]
+                    )
+                    if not exists:
+                        data["message_archive"].append({
+                            "content": msg.content,
+                            "author": msg.author.display_name,
+                            "user_id": str(msg.author.id),
+                            "channel": channel.name,
+                            "timestamp": msg.created_at.strftime("%Y-%m-%d %H:%M")
+                        })
+                        learn_sentence_trigrams(data, msg.content, msg.author.id)
+                        scanned_count += 1
+                    
+                    await asyncio.sleep(0.01)
+                    
+            except Exception as exc:
+                logger.warning(f"Error scanning {channel.name}: {exc}")
+                continue
 
-    data = prune_message_archive(data)
-    await save_data_async(data)
+        data = prune_message_archive(data)
+        await save_data_async(data)
 
-    msg_str = f"🧠⚡ **BrainScan Complete!** Indexed **{scanned_count:,}** messages from **{scanned_channels}** channels."
-    if ctx.interaction:
-        await ctx.followup.send(msg_str, ephemeral=True)
-    else:
-        await ctx.send(msg_str)
+        msg_str = f"🧠⚡ **BrainScan Complete!** Indexed **{scanned_count:,}** messages from **{scanned_channels}** channels."
+        logger.info(f"BrainScan finished: {scanned_count} messages from {scanned_channels} channels")
+        
+        if ctx.interaction:
+            await ctx.followup.send(msg_str, ephemeral=True)
+        else:
+            await ctx.send(msg_str)
+            
+    except Exception as exc:
+        logger.error(f"BrainScan failed: {exc}")
+        error_msg = f"❌ BrainScan failed: {str(exc)}"
+        if ctx.interaction:
+            await ctx.followup.send(error_msg, ephemeral=True)
+        else:
+            await ctx.send(error_msg)
 
 @bot.hybrid_command(name="quote", description="Get a random server quote")
 async def quote(ctx: commands.Context):
@@ -586,105 +603,5 @@ async def addquote(ctx: commands.Context, *, text: str):
     data["quotes"].append({
         "text": text,
         "added_by": f"{ctx.author.display_name} (Manual ✨)",
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
-    })
-    await save_data_async(data)
-    await ctx.reply(f"✅ Quote added!", ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="leaderboard", description="Top chatters")
-async def leaderboard(ctx: commands.Context):
-    """Show chat leaderboard."""
-    data = load_data()
-    counts = data.get("user_chat_counts", {})
-    if not counts:
-        return await ctx.reply("❌ No data yet.", ephemeral=bool(ctx.interaction))
-
-    sorted_users = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:10]
-    embed = discord.Embed(title="🏆 Chat Leaderboard", color=discord.Color.orange())
-
-    desc = ""
-    for idx, (uid, count) in enumerate(sorted_users, 1):
-        member = ctx.guild.get_member(int(uid))
-        name = member.display_name if member else f"User {uid}"
-        desc += f"**{idx}.** {name} — **{count:,}** msgs\n"
-
-    embed.description = desc
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="roast", description="Get an AI roast")
-@commands.cooldown(1, CONFIG["command_cooldown"], commands.BucketType.user)
-async def roast(ctx: commands.Context, member: discord.Member = None):
-    """Roast a user."""
-    target = member or ctx.author
-    data = load_data()
-    roast_text = generate_complex_ai_mimic(data, user_id=target.id, max_words=12)
-    embed = discord.Embed(title=f"🔥 Roast: {target.display_name}", description=f"\"{roast_text}\"", color=discord.Color.red())
-    await ctx.reply(embed=embed)
-
-@bot.hybrid_command(name="magic8", description="Ask the magic 8-ball")
-async def magic8(ctx: commands.Context, *, question: str):
-    """Magic 8-ball."""
-    responses = [
-        "It is decidedly so fr fr",
-        "Outlook not so good tbh",
-        "Most definitely lol",
-        "Without a doubt lmao",
-        "Better not tell you now 💀",
-    ]
-    await ctx.reply(f"🎱 **Q:** {question}\n🔮 **A:** {random.choice(responses)}", ephemeral=bool(ctx.interaction))
-
-@bot.hybrid_command(name="poll", description="Create a reaction poll")
-async def poll(ctx: commands.Context, *, question: str):
-    """Create a poll."""
-    embed = discord.Embed(title="📊 Poll", description=question, color=discord.Color.blue())
-    embed.set_footer(text=f"By {ctx.author.display_name}")
-
-    if ctx.interaction:
-        await ctx.interaction.response.send_message(embed=embed)
-        msg = await ctx.interaction.original_response()
-    else:
-        msg = await ctx.send(embed=embed)
-
-    await msg.add_reaction("👍")
-    await msg.add_reaction("👎")
-
-@bot.hybrid_command(name="cleardata", description="[Admin] Wipe all data")
-@commands.has_permissions(administrator=True)
-async def cleardata(ctx: commands.Context):
-    """Clear all data."""
-    global _DATA_CACHE
-    _DATA_CACHE = default_schema()
-    await save_data_async()
-    logger.warning(f"Data cleared by {ctx.author}")
-    await ctx.reply("⚠️ All data cleared!", ephemeral=True)
-
-@bot.hybrid_command(name="health", description="Bot health check")
-async def health(ctx: commands.Context):
-    """Health check."""
-    data = load_data()
-    status = "🟢 Optimal" if len(data["trigrams"]) > 10 else "🟡 Learning"
-    embed = discord.Embed(title="🛠️ System Health", color=discord.Color.green())
-    embed.add_field(name="Status", value=status, inline=True)
-    embed.add_field(name="Messages Archived", value=f"{len(data['message_archive']):,}", inline=True)
-    embed.add_field(name="Last Updated", value=data.get("last_updated", "N/A"), inline=True)
-    await ctx.reply(embed=embed, ephemeral=bool(ctx.interaction))
-
-# ============================================================
-# Startup
-# ============================================================
-if __name__ == "__main__":
-    try:
-        logger.info("🚀 Starting LoreKeeper bot...")
-        ensure_data_file()
-        logger.info("✅ Data file ready")
-        bot.run(CONFIG["token"])
-    except discord.LoginFailure:
-        logger.error("❌ Invalid Discord token")
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot shutting down...")
-        save_data()
-        sys.exit(0)
-    except Exception as exc:
-        logger.exception(f"❌ Fatal error: {exc}")
-        sys.exit(1)
+        "timestamp": datetime.now*
+
