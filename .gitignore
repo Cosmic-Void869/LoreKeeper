@@ -27,6 +27,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+.pytest_cache/
+.coverage
 
 # IDE
 .vscode/
@@ -34,12 +36,26 @@ wheels/
 *.swp
 *.swo
 *~
+*.sublime-project
+*.sublime-workspace
 
-# Bot data files
+# Bot data files (IMPORTANT - DO NOT COMMIT)
 server_lore.json
 server_lore.backup.json
+lorekeeper.log
 *.log
+
+# Docker
+.dockerignore
+.docker/
 
 # OS
 .DS_Store
 Thumbs.db
+*.tmp
+*.bak
+
+# Other
+node_modules/
+*.pdb
+.cache/
