@@ -85,7 +85,7 @@ _LAST_RANDOM_REPLY = {}
 WORD_BLACKLIST = ["token", "password", "secret", "https://", "http://"]
 
 # ============================================================
-# Utility Functions
+# Data File Helpers (AUTO-CREATE)
 # ============================================================
 def default_schema() -> dict:
     """Return the default data schema."""
@@ -107,6 +107,30 @@ def ensure_schema(data: dict) -> dict:
         data.setdefault(key, val)
     return data
 
+def ensure_data_file():
+    """Create server_lore.json if it doesn't exist."""
+    global _DATA_CACHE
+    
+    if CONFIG["data_file"].exists():
+        logger.info(f"📁 Data file found: {CONFIG['data_file']}")
+        return
+    
+    logger.info(f"📁 Creating new data file: {CONFIG['data_file']}")
+    default_data = default_schema()
+    try:
+        CONFIG["data_file"].write_text(
+            json.dumps(default_data, indent=4, ensure_ascii=False),
+            encoding="utf-8"
+        )
+        logger.info("✅ Data file created successfully")
+        _DATA_CACHE = default_data
+    except Exception as exc:
+        logger.error(f"❌ Failed to create data file: {exc}")
+        raise
+
+# ============================================================
+# Utility Functions
+# ============================================================
 def check_command_cooldown(user_id: int, cooldown_seconds: int = CONFIG["command_cooldown"]) -> bool:
     """Check if a user is on cooldown."""
     now = datetime.now()
@@ -647,6 +671,8 @@ async def health(ctx: commands.Context):
 if __name__ == "__main__":
     try:
         logger.info("🚀 Starting LoreKeeper bot...")
+        ensure_data_file()  # AUTO-CREATE server_lore.json HERE
+        logger.info("✅ Data file ready")
         bot.run(CONFIG["token"])
     except discord.LoginFailure:
         logger.error("❌ Invalid Discord token")
