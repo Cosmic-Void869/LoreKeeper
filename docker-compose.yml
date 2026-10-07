@@ -1,0 +1,12 @@
+version: '3.8'
+
+services:
+  bot:
+    build: .
+    container_name: lorekeeper-bot
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./server_lore.json:/app/server_lore.json
+      - ./server_lore.backup.json:/app/server_lore.backup.json
+      - ./lorekeeper.log:/app/lorekeeper.log
