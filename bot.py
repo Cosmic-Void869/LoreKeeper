@@ -392,6 +392,8 @@ async def status_rotator():
 # ============================================================
 # Bot Events
 # ============================================================
+MY_ID = 123456789012345678  # 👈 MAKE SURE TO PUT YOUR REAL DISCORD USER ID HERE
+
 @bot.event
 async def on_ready():
     """Bot is ready."""
@@ -437,6 +439,24 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # ==================== ADDED: SECURITY BLOCK FOR !BRAINSCAN ====================
+    if message.content.strip().startswith("!brainscan"):
+        is_owner = message.author.id == MY_ID
+        
+        # Check for administrator permissions safely (handles DMs cleanly if they happen)
+        is_admin = message.author.guild_permissions.administrator if message.guild else False
+
+        # If it's you, let it pass straight to processing!
+        if is_owner:
+            await bot.process_commands(message)
+            return
+
+        # If it's someone else who is NOT an admin, block them completely
+        if not is_admin:
+            await message.channel.send("❌ You do not have permission to use this command.")
+            return
+    # ==============================================================================
+
     if message.content.startswith("!"):
         await bot.process_commands(message)
         return
@@ -453,7 +473,7 @@ async def on_message(message: discord.Message):
             "content": message.content,
             "author": message.author.display_name,
             "user_id": user_id,
-            "channel": message.channel.name,
+            "channel": message.channel.name if message.channel else "DM",
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M")
         })
 
@@ -494,6 +514,7 @@ async def on_message(message: discord.Message):
 async def on_error(event, *args, **kwargs):
     """Handle bot errors."""
     logger.exception(f"Error in {event}")
+
 
 # ============================================================
 # Commands
