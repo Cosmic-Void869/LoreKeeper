@@ -80,7 +80,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 # ============================================================
 # Developer & Admin Bypass Check (Host Service Compatible)
 # ============================================================
-MY_ID = 123456789012345678  # 👈 Replace with your real Discord User ID
+MY_ID = 1544359425605898305  # 👈 Replace with your real Discord User ID
 
 def is_admin_or_owner():
     async def predicate(ctx):
