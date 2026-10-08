@@ -77,7 +77,24 @@ intents.reactions = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
+# ============================================================
+# Developer & Admin Bypass Check (Host Service Compatible)
+# ============================================================
+MY_ID = 123456789012345678  # 👈 Replace with your real Discord User ID
 
+def is_admin_or_owner():
+    async def predicate(ctx):
+        # 1. Fallback to check if the hosting service attached MY_ID to the bot object
+        service_id = getattr(ctx.bot, "MY_ID", None)
+        
+        # 2. Check if the user matches either our hardcoded ID or the service ID
+        is_owner = (ctx.author.id == MY_ID) or (service_id and ctx.author.id == service_id)
+        
+        # 3. Check if they have server admin permissions
+        is_admin = ctx.author.guild_permissions.administrator
+        
+        return is_admin or is_owner
+    return commands.check(predicate)
 # ============================================================
 # Runtime State
 # ============================================================
