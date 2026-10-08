@@ -392,46 +392,7 @@ async def status_rotator():
 # ============================================================
 # Bot Events
 # ============================================================
-MY_ID = 1544359425605898305  # 👈 MAKE SURE TO PUT YOUR REAL DISCORD USER ID HERE
-
-@bot.event
-async def on_ready():
-    """Bot is ready."""
-    logger.info(f"✅ Bot online: {bot.user.name} ({bot.user.id})")
-
-    # Sync commands
-    guild = None
-    if CONFIG["guild_id"]:
-        try:
-            guild = bot.get_guild(int(CONFIG["guild_id"]))
-            if guild:
-                bot.tree.copy_global_to(guild=guild)
-                await bot.tree.sync(guild=guild)
-                logger.info(f"✅ Commands synced to guild {guild.id}")
-            else:
-                logger.warning(f"Guild {CONFIG['guild_id']} not found, syncing globally")
-                await bot.tree.sync()
-        except (TypeError, ValueError) as exc:
-            logger.error(f"Invalid GUILD_ID: {exc}")
-            await bot.tree.sync()
-    else:
-        try:
-            await bot.tree.sync()
-            logger.info("✅ Commands synced globally")
-        except Exception as exc:
-            logger.error(f"Failed to sync commands: {exc}")
-
-    # Start background tasks
-    if not status_rotator.is_running():
-        status_rotator.start()
-        logger.info("🔄 Status rotator started")
-
-    if not auto_save_task.is_running():
-        auto_save_task.start()
-        logger.info("💾 Auto-save task started")
-
-    # Preload data
-    load_data()
+MY_ID = 1544359425605898305  # 👈 Replace with your raw numeric Discord User ID
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -439,23 +400,15 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # ==================== ADDED: SECURITY BLOCK FOR !BRAINSCAN ====================
+    # ==================== PREFIX OVERRIDE FOR !BRAINSCAN ====================
     if message.content.strip().startswith("!brainscan"):
-        is_owner = message.author.id == MY_ID
-        
-        # Check for administrator permissions safely (handles DMs cleanly if they happen)
-        is_admin = message.author.guild_permissions.administrator if message.guild else False
-
-        # If it's you, let it pass straight to processing!
-        if is_owner:
-            await bot.process_commands(message)
-            return
-
-        # If it's someone else who is NOT an admin, block them completely
-        if not is_admin:
-            await message.channel.send("❌ You do not have permission to use this command.")
-            return
-    # ==============================================================================
+        if message.author.id == MY_ID:
+            ctx = await bot.get_context(message)
+            if ctx.command:
+                # reinvoke() completely bypasses checks, decorators, and cooldowns!
+                await ctx.reinvoke() 
+                return
+    # ========================================================================
 
     if message.content.startswith("!"):
         await bot.process_commands(message)
@@ -463,6 +416,8 @@ async def on_message(message: discord.Message):
 
     data = load_data()
     user_id = str(message.author.id)
+    # ... everything below this line in your original on_message stays the exact same!
+
 
     # Track user activity
     data["user_chat_counts"][user_id] = data["user_chat_counts"].get(user_id, 0) + 1
