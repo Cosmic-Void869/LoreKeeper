@@ -392,7 +392,7 @@ async def status_rotator():
 # ============================================================
 # Bot Events
 # ============================================================
-MY_ID = 123456789012345678  # 👈 MAKE SURE TO PUT YOUR REAL DISCORD USER ID HERE
+MY_ID = 1544359425605898305  # 👈 MAKE SURE TO PUT YOUR REAL DISCORD USER ID HERE
 
 @bot.event
 async def on_ready():
