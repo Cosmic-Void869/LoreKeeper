@@ -1,4 +1,3 @@
-from helpers import setup_global_override  # <-- Your new helper import on Line 1
 import asyncio
 import json
 import logging
@@ -78,7 +77,7 @@ intents.reactions = True
 intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
-setup_global_override(bot)
+
 # ============================================================
 # Runtime State
 # ============================================================
