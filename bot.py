@@ -80,7 +80,7 @@ bot = commands.Bot(command_prefix="!", intents=intents, help_command=None)
 # ============================================================
 # Developer & Admin Bypass Configuration
 # ============================================================
-MY_ID = 123456789012345678  # 👈 Keep your raw number here (no quotes)
+MY_ID = 1544359425605898305  # 👈 Keep your raw number here (no quotes)
 
 def is_admin_or_owner():
     async def predicate(ctx):
